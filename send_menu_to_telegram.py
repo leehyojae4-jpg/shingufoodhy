@@ -75,11 +75,14 @@ def get_menu_data(seq, target_date):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        print(f"[{seq}] API 호출 실패: {e}")
+        print(f"⚠️ [{seq}] API 호출 중 오류 발생: {e}")
         return None
 
 def format_menu(menu_item):
     """메뉴 아이템을 보기 좋은 텍스트로 변환"""
+    if not menu_item:
+        return "🍽 등록된 메뉴가 없습니다."
+        
     message_lines = []
     found_any = False
     
@@ -95,8 +98,9 @@ def format_menu(menu_item):
             if title:
                 message_lines.append(f"🔸 <b>{title}</b>")
             if content:
-                content = content.replace('\r\n', '\n')
-                message_lines.append(content)
+                # 불필요한 줄바꿈 정리
+                clean_content = content.replace('\r\n', '\n').strip()
+                message_lines.append(clean_content)
             message_lines.append("")
             
     if not found_any:
@@ -107,7 +111,7 @@ def format_menu(menu_item):
 def send_to_telegram(text):
     """텔레그램으로 메시지를 전송합니다."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("❌ 오류: TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID 환경 변수가 설정되지 않았습니다.")
+        print("❌ 설정 오류: TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID 환경 변수가 없습니다.")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -117,80 +121,93 @@ def send_to_telegram(text):
         'parse_mode': 'HTML'
     }
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=15)
         res_json = response.json()
         if not res_json.get("ok"):
-            print(f"❌ 텔레그램 응답 에러: {res_json.get('description')}")
+            print(f"❌ 텔레그램 서버 응답 오류: {res_json.get('description')}")
         return res_json.get("ok", False)
     except Exception as e:
-        print(f"텔레그램 전송 오류: {e}")
+        print(f"⚠️ 텔레그램 메시지 전송 중 예외 발생: {e}")
         return False
 
 def main():
+    print("🚀 신구대학교 식단 크롤러 시작")
+    
     kst_now = get_kst_now()
     target_date = kst_now
-    target_date_key = target_date.strftime("%Y%m%d")
+    
+    # 디버깅을 위해 다양한 날짜 형식 준비
+    date_formats = [
+        target_date.strftime("%Y%m%d"),    # 20260416
+        target_date.strftime("%Y.%m.%d")  # 2026.04.16
+    ]
     display_date = target_date.strftime("%Y년 %m월 %d일 (%a)")
 
-    print(f"📅 날짜: {display_date}")
+    print(f"📅 대상 날짜: {display_date} (포맷: {date_formats})")
     
     telegram_message = f"🏫 <b>신구대학교 오늘의 학식</b>\n"
     telegram_message += f"📅 {display_date}\n\n"
 
-    success_count = 0
+    total_success = 0
     for bistro in BISTROS:
         bistro_name = bistro['name']
         bistro_seq = bistro['seq']
         bistro_icon = bistro['icon']
         
-        print(f"🔍 {bistro_name} 식단 가져오는 중...")
+        print(f"🔍 {bistro_name} (SEQ: {bistro_seq}) 데이터 요청 중...")
         json_data = get_menu_data(bistro_seq, target_date)
-        menu_content = "❌ 식단 데이터가 없습니다."
         
+        todays_item = None
         if json_data:
+            # API 응답 구조 분석 (data 키가 있을 수도 있고, 자체가 리스트일 수도 있음)
             items = []
-            if isinstance(json_data, dict) and 'data' in json_data:
-                items = json_data['data']
+            if isinstance(json_data, dict):
+                items = json_data.get('data', [])
+                if not items and 'STD_DT' in json_data: # 단일 객체인 경우
+                    items = [json_data]
             elif isinstance(json_data, list):
                 items = json_data
             
-            todays_item = None
+            print(f"   ∟ 총 {len(items)}개의 데이터 수신")
+            
             for item in items:
-                item_date = item.get('STD_DT')
+                # 날짜 키 확인
+                item_date = str(item.get('STD_DT', '')).replace('.', '').replace('-', '')
                 if not item_date:
-                    ym = item.get('STD_YM', '').replace('.', '')
-                    dd = item.get('STD_DD', '')
+                    ym = str(item.get('STD_YM', '')).replace('.', '').replace('-', '')
+                    dd = str(item.get('STD_DD', ''))
                     if ym and dd:
                         item_date = f"{ym}{dd}"
                 
-                if item_date == target_date_key:
+                if item_date in date_formats:
                     todays_item = item
                     break
-            
-            if todays_item:
-                menu_content = format_menu(todays_item)
-                success_count += 1
         
-        telegram_message += f"{bistro_icon} <b>{bistro_name}</b>\n{menu_content}\n\n"
+        menu_text = format_menu(todays_item)
+        if todays_item:
+            total_success += 1
+            print(f"   ✅ {bistro_name}: 식단 찾음")
+        else:
+            print(f"   ℹ️ {bistro_name}: 해당 날짜 식단 없음")
+            
+        telegram_message += f"{bistro_icon} <b>{bistro_name}</b>\n{menu_text}\n\n"
 
     telegram_message += "맛있게 드세요! 😋"
 
-    if success_count > 0:
-        print("🚀 텔레그램으로 전송 시도 중...")
-        if send_to_telegram(telegram_message):
-            print("✅ 성공: 오늘의 식단이 텔레그램으로 전송되었습니다!")
-            sys.exit(0)
-        else:
-            print("❌ 실패: 메시지 전송에 실패했습니다.")
-            sys.exit(1)
-    else:
-        print("❌ 실패: 식단 데이터를 하나도 찾을 수 없습니다.")
-        # 데이터가 없을 때는 에러는 아니지만 전송은 안 함 (0으로 종료하거나 상황에 맞게 조절)
+    # 메시지 전송
+    print("📤 텔레그램 전송 중...")
+    if send_to_telegram(telegram_message):
+        print("🎉 모든 작업 성공!")
         sys.exit(0)
+    else:
+        print("终止: 텔레그램 전송에 실패했습니다.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        print(f"💥 치명적 오류 발생: {e}")
+        print(f"❌ 예기치 못한 치명적 오류: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)

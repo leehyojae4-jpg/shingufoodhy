@@ -29,11 +29,11 @@ venv/
 telegram api 활용방법.txt
 *.log
 
-# Sensitive Scripts (Python files with tokens)
-send_menu_to_telegram.py
-shingu_menu_app.py
-test_telegram_bot.py
-send_instruction_to_telegram.py
+# Sensitive Scripts (Now using Environment Variables)
+# send_menu_to_telegram.py
+# shingu_menu_app.py
+# test_telegram_bot.py
+# send_instruction_to_telegram.py
 
 # Binaries and potentially sensitive files
 *.exe
